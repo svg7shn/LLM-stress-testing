@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM 压测台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">LLM 压测台 <span class="ver">0.1.0</span></div>
+  <div class="sub">并发 · 延迟 · RPS · TTFT · 吞吐 → 可复现的服务决策</div>
+</header>
+
+<main class="layout">
+  <section class="panel" id="config-panel">
+    <form id="run-form" autocomplete="off">
+      <h2>1 · 目标与密钥</h2>
+      <label>Base URL
+        <input id="base_url" type="text" placeholder="https://api.example.com 或 https://api.example.com/v1" required>
+        <span class="hint">填中转站站点地址即可（带不带 /v1 都行），拉模型时会自动找 /v1/models 等常见路径。</span>
+      </label>
+      <label>API Key
+        <input id="api_key" type="password" placeholder="sk-...">
+      </label>
+      <div class="row">
+        <label class="grow">协议
+          <select id="protocol">
+            <option value="openai">openai (/v1/chat/completions)</option>
+            <option value="anthropic">anthropic (/v1/messages)</option>
+            <option value="gemini">gemini (/v1beta)</option>
+          </select>
+        </label>
+        <button type="button" id="btn-models" class="ghost">拉取模型</button>
+      </div>
+      <label>模型（逗号分隔，请求会轮流使用）
+        <input id="models" type="text" placeholder="gpt-4o-mini, claude-sonnet-4" required>
+      </label>
+      <p class="hint" id="model-count"></p>
+      <div id="model-list" class="chips"></div>
+
+      <h2>2 · 场景</h2>
+      <div class="seg" id="scene-seg">
+        <button type="button" data-scene="baseline">基线</button>
+        <button type="button" data-scene="ladder" class="on">阶梯加压</button>
+        <button type="button" data-scene="soak">长稳</button>
+      </div>
+      <input type="hidden" id="scene" value="ladder">
+      <label>数据集
+        <select id="dataset"></select>
+      </label>
+      <p class="hint" id="dataset-hint"></p>
+
+      <h2>3 · 参数</h2>
+      <div class="grid2">
+        <label data-for="baseline">基线请求数
+          <input id="requests" type="number" min="1" max="5000" value="20">
+        </label>
+        <label data-for="baseline">并发数
+          <input id="concurrency" type="number" min="1" max="256" value="4">
+        </label>
+        <label data-for="ladder">起始并发
+          <input id="start" type="number" min="1" max="256" value="1">
+        </label>
+        <label data-for="ladder">递增倍数
+          <input id="step" type="number" min="1.1" max="8" step="0.1" value="2">
+        </label>
+        <label data-for="ladder">最高并发
+          <input id="stop" type="number" min="1" max="256" value="16">
+        </label>
+        <label data-for="ladder">每档请求数
+          <input id="requests_per_stage" type="number" min="1" max="5000" value="30">
+        </label>
+        <label data-for="soak">持续并发
+          <input id="soak_concurrency" type="number" min="1" max="256" value="4">
+        </label>
+        <label data-for="soak">持续时长（秒）
+          <input id="duration_s" type="number" min="10" max="86400" step="10" value="600">
+        </label>
+        <label>单请求超时（秒）
+          <input id="timeout_s" type="number" min="1" max="600" value="120">
+        </label>
+        <label>输入单价（$/百万 token）
+          <input id="price_in_per_m" type="number" min="0" step="0.01" value="0">
+        </label>
+        <label>输出单价（$/百万 token）
+          <input id="price_out_per_m" type="number" min="0" step="0.01" value="0">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="btn-run" class="primary">开始压测</button>
+        <button type="button" id="btn-compare" class="ghost">多模型横评</button>
+        <button type="button" id="btn-cancel" class="danger" disabled>取消</button>
+      </div>
+      <p class="hint">压测会产生真实调用与真实费用。长稳前先估算 token 总量。</p>
+    </form>
+  </section>
+
+  <section class="panel" id="run-panel">
+    <h2>运行状态</h2>
+    <div class="statusline">
+      <span id="status-badge" class="badge idle">空闲</span>
+      <span id="status-text">尚未开始</span>
+    </div>
+    <div class="progress"><div id="progress-bar"></div></div>
+    <div id="live-stats" class="stats"></div>
+
+    <h3 id="stage-title">各档结果</h3>
+    <div class="tablewrap" id="stage-wrap">
+      <table id="stage-table">
+        <thead>
+          <tr>
+            <th>并发</th><th>请求</th><th>成功率</th><th>RPS</th><th>输出吞吐</th>
+            <th>TTFT p50</th><th>TTFT p95</th><th>总延迟 p95</th><th>TPOT p50</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3>结论</h3>
+    <div id="verdict" class="verdict empty">跑一次压测，这里给出可执行结论。</div>
+
+    <h3 id="compare-title" class="hidden">多模型横评</h3>
+    <div id="compare-result"></div>
+  </section>
+
+  <section class="panel wide">
+    <h2>历史报告</h2>
+    <div class="split">
+      <ul id="report-list" class="reports"><li class="muted">加载中…</li></ul>
+      <article id="report-view" class="markdown"><p class="muted">选择左侧报告查看 Markdown 全文。</p></article>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
